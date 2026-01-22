@@ -1,18 +1,38 @@
 """FastAPI backend for LLM Council."""
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import uuid
 import json
 import asyncio
+import logging
 
 from . import storage
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
+from .copilot_client import start_client, stop_client, get_available_models
 
-app = FastAPI(title="LLM Council API")
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage Copilot client lifecycle."""
+    logger.info("Starting Copilot client...")
+    await start_client()
+    logger.info("Copilot client started successfully")
+    yield
+    logger.info("Stopping Copilot client...")
+    await stop_client()
+    logger.info("Copilot client stopped")
+
+
+app = FastAPI(title="LLM Council API", lifespan=lifespan)
 
 # Enable CORS for local development
 app.add_middleware(
@@ -32,6 +52,12 @@ class CreateConversationRequest(BaseModel):
 class SendMessageRequest(BaseModel):
     """Request to send a message in a conversation."""
     content: str
+
+
+class SettingsRequest(BaseModel):
+    """Request to update settings."""
+    council_models: List[str]
+    chairman_model: str
 
 
 class ConversationMetadata(BaseModel):
@@ -54,6 +80,31 @@ class Conversation(BaseModel):
 async def root():
     """Health check endpoint."""
     return {"status": "ok", "service": "LLM Council API"}
+
+
+@app.get("/api/models")
+async def list_models():
+    """List all available models from Copilot."""
+    models = get_available_models()
+    return {"models": models}
+
+
+@app.get("/api/settings")
+async def get_settings():
+    """Get current council settings."""
+    settings = storage.get_settings()
+    return settings
+
+
+@app.post("/api/settings")
+async def update_settings(request: SettingsRequest):
+    """Update council settings."""
+    settings = {
+        "council_models": request.council_models,
+        "chairman_model": request.chairman_model
+    }
+    storage.save_settings(settings)
+    return settings
 
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
@@ -96,14 +147,21 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
     # Add user message
     storage.add_user_message(conversation_id, request.content)
 
+    # Get current settings
+    settings = storage.get_settings()
+    council_models = settings.get("council_models", [])
+    chairman_model = settings.get("chairman_model")
+
     # If this is the first message, generate a title
     if is_first_message:
-        title = await generate_conversation_title(request.content)
+        title = await generate_conversation_title(request.content, chairman_model)
         storage.update_conversation_title(conversation_id, title)
 
     # Run the 3-stage council process
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
-        request.content
+        request.content,
+        council_models,
+        chairman_model
     )
 
     # Add assistant message with all stages
@@ -137,6 +195,11 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
     # Check if this is the first message
     is_first_message = len(conversation["messages"]) == 0
 
+    # Get current settings
+    settings = storage.get_settings()
+    council_models = settings.get("council_models", [])
+    chairman_model = settings.get("chairman_model")
+
     async def event_generator():
         try:
             # Add user message
@@ -145,22 +208,22 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             # Start title generation in parallel (don't await yet)
             title_task = None
             if is_first_message:
-                title_task = asyncio.create_task(generate_conversation_title(request.content))
+                title_task = asyncio.create_task(generate_conversation_title(request.content, chairman_model))
 
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(request.content)
+            stage1_results = await stage1_collect_responses(request.content, council_models)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results)
+            stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results, council_models)
             aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
             yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-            stage3_result = await stage3_synthesize_final(request.content, stage1_results, stage2_results)
+            stage3_result = await stage3_synthesize_final(request.content, stage1_results, stage2_results, chairman_model)
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
             # Wait for title generation if it was started

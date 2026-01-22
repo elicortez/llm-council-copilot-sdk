@@ -5,12 +5,17 @@ import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
-from .config import DATA_DIR
+from .config import DATA_DIR, SETTINGS_FILE, DEFAULT_COUNCIL_MODELS, DEFAULT_CHAIRMAN_MODEL
 
 
 def ensure_data_dir():
     """Ensure the data directory exists."""
     Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+
+
+def ensure_settings_dir():
+    """Ensure the settings directory exists."""
+    Path(SETTINGS_FILE).parent.mkdir(parents=True, exist_ok=True)
 
 
 def get_conversation_path(conversation_id: str) -> str:
@@ -170,3 +175,52 @@ def update_conversation_title(conversation_id: str, title: str):
 
     conversation["title"] = title
     save_conversation(conversation)
+
+
+# ============================================================================
+# Settings Management
+# ============================================================================
+
+def get_settings() -> Dict[str, Any]:
+    """
+    Load global settings from storage.
+
+    Returns:
+        Settings dict with council_models and chairman_model
+    """
+    ensure_settings_dir()
+
+    if not os.path.exists(SETTINGS_FILE):
+        # Return defaults if no settings file exists
+        return {
+            "council_models": DEFAULT_COUNCIL_MODELS,
+            "chairman_model": DEFAULT_CHAIRMAN_MODEL
+        }
+
+    try:
+        with open(SETTINGS_FILE, 'r') as f:
+            settings = json.load(f)
+            # Ensure required keys exist with defaults
+            if "council_models" not in settings:
+                settings["council_models"] = DEFAULT_COUNCIL_MODELS
+            if "chairman_model" not in settings:
+                settings["chairman_model"] = DEFAULT_CHAIRMAN_MODEL
+            return settings
+    except (json.JSONDecodeError, IOError):
+        return {
+            "council_models": DEFAULT_COUNCIL_MODELS,
+            "chairman_model": DEFAULT_CHAIRMAN_MODEL
+        }
+
+
+def save_settings(settings: Dict[str, Any]) -> None:
+    """
+    Save global settings to storage.
+
+    Args:
+        settings: Settings dict with council_models and chairman_model
+    """
+    ensure_settings_dir()
+
+    with open(SETTINGS_FILE, 'w') as f:
+        json.dump(settings, f, indent=2)

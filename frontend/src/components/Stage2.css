@@ -2,6 +2,31 @@
   background: #fafafa;
 }
 
+.stage2 .stage-warnings {
+  margin-bottom: 16px;
+}
+
+.stage2 .warning-banner {
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  color: #856404;
+  font-size: 14px;
+}
+
+.stage2 .warning-banner strong {
+  font-weight: 600;
+}
+
+.stage2 .no-responses {
+  text-align: center;
+  color: #666;
+  padding: 24px;
+  font-style: italic;
+}
+
 .stage2 h4 {
   margin: 20px 0 8px 0;
   color: #333;
