@@ -32,7 +32,7 @@ Follow the [Copilot CLI installation guide](https://docs.github.com/en/copilot/h
 ### 3. Authenticate
 
 ```bash
-copilot auth login
+copilot -i "auth login"
 ```
 
 This opens a browser window to authenticate with your GitHub account.
